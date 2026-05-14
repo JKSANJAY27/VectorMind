@@ -1,7 +1,9 @@
 services:
   # API service
   api:
-    build: .
+    build:
+      context: .
+      provenance: false
     container_name: rag-api
     ports:
       - "8000:8000"
@@ -16,13 +18,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    env_file:
-      - .env
     environment:
-      # Container-specific overrides (for inter-service communication)
       - OPENSEARCH_HOST=http://opensearch:9200
-      - OLLAMA_HOST=http://ollama:11434
-      - POSTGRES_DATABASE_URL=${POSTGRES_DATABASE_URL}
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - POSTGRES_DATABASE_URL=postgresql+psycopg2://rag_user:rag_password@postgres:5432/rag_db
+      - ENVIRONMENT=development
     networks:
       - rag-network
 
@@ -33,14 +33,9 @@ services:
       - discovery.type=single-node
       - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
       - DISABLE_SECURITY_PLUGIN=true
-      - bootstrap.memory_lock=true
     ports:
       - "9200:9200"
       - "9600:9600"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
     volumes:
       - opensearch_data:/usr/share/opensearch/data
     healthcheck:
@@ -73,26 +68,25 @@ services:
       - rag-network
 
   airflow:
-    build:
+    build: 
       context: ./airflow
       dockerfile: Dockerfile
+      provenance: false
     container_name: rag-airflow
     # user: "50000:0"  # Uncomment for WSL/Ubuntu, comment out for Mac
     depends_on:
       postgres:
         condition: service_healthy
-      opensearch:
-        condition: service_healthy
-    env_file:
-      - .env
     environment:
-      # Airflow-specific environment setup
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://rag_user:rag_password@postgres:5432/rag_db
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=true
       - AIRFLOW_HOME=/opt/airflow
-      - PYTHONPATH=/opt/airflow/src
-      # Container hostnames for Airflow
-      - POSTGRES_DATABASE_URL=${POSTGRES_DATABASE_URL}
+      # Environment variables for DAG tasks
+      - POSTGRES_DATABASE_URL=postgresql+psycopg2://rag_user:rag_password@postgres:5432/rag_db
       - OPENSEARCH_HOST=http://opensearch:9200
-      - OLLAMA_HOST=http://ollama:11434
+      - PYTHONPATH=/opt/airflow/src
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - airflow_logs:/opt/airflow/logs
@@ -110,21 +104,7 @@ services:
     networks:
       - rag-network
 
-  ollama:
-    image: ollama/ollama:0.11.2
-    container_name: rag-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - rag-network
+
 
   postgres:
     image: postgres:16-alpine
@@ -153,7 +133,7 @@ services:
 volumes:
   postgres_data:
   opensearch_data:
-  ollama_data:
+
   airflow_logs:
 
 networks:

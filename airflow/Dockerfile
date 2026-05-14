@@ -36,6 +36,8 @@ RUN pip install --no-cache-dir \
 
 # Copy requirements and install project dependencies
 COPY requirements-airflow.txt /tmp/requirements-airflow.txt
+# Pre-install CPU-only PyTorch to prevent pip from downloading 5GB CUDA wheels and crashing Docker on Windows
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r /tmp/requirements-airflow.txt
 
 # Copy and set up entrypoint script
