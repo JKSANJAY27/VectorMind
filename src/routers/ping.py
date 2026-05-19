@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from sqlalchemy import text
 
-from ..dependencies import DatabaseDep, SettingsDep
+from ..dependencies import DatabaseDep, OpenSearchDep, SettingsDep
 from ..exceptions import OllamaConnectionError, OllamaException, OllamaTimeoutError
 from ..schemas.api.health import HealthResponse, ServiceStatus
 from ..services.ollama import OllamaClient
@@ -19,48 +19,56 @@ async def ping():
     "/health",
     response_model=HealthResponse,
     summary="Health check",
-    description="Check the health and status of the API service including database connectivity.",
+    description="Check the health and status of the API service including database, OpenSearch, and Ollama connectivity.",
     response_description="Service health information",
     tags=["Health"],
 )
-async def health_check(settings: SettingsDep, database: DatabaseDep) -> HealthResponse:
-    """
-    Comprehensive health check endpoint for monitoring and load balancer probes.
+async def health_check(
+    settings: SettingsDep,
+    database: DatabaseDep,
+    opensearch_client: OpenSearchDep,
+) -> HealthResponse:
+    """Comprehensive health check endpoint for monitoring and load balancer probes.
 
-    This endpoint provides information about the service health, version,
-    environment, and checks connectivity to dependent services like database.
+    Checks connectivity to PostgreSQL, OpenSearch, and Ollama. Reports overall
+    status as ``ok`` (all healthy) or ``degraded`` (one or more services down).
 
-    Returns:
-        HealthResponse: Contains service status, version, environment, and service checks
-
-    Example:
-        Response:
-        ```
-        {
-            "status": "ok",
-            "version": "0.1.0",
-            "environment": "development",
-            "service_name": "rag-api",
-            "services": {
-                "database": {"status": "healthy", "message": "Connected successfully"}
-            }
-        }
-        ```
+    :param settings: Application settings
+    :param database: Database instance
+    :param opensearch_client: OpenSearch client
+    :returns: Service health status with version and connectivity checks
+    :rtype: HealthResponse
     """
     services = {}
     overall_status = "ok"
 
-    # Test database connectivity
+    # --- Database check ---
     try:
         with database.get_session() as session:
-            # Simple query to test connection
             session.execute(text("SELECT 1"))
-            services["database"] = ServiceStatus(status="healthy", message="Connected successfully")
+        services["database"] = ServiceStatus(status="healthy", message="Connected successfully")
     except Exception as e:
         services["database"] = ServiceStatus(status="unhealthy", message=f"Connection failed: {str(e)}")
         overall_status = "degraded"
 
-    # Test Ollama service connectivity (Week 1 notebook requirement)
+    # --- OpenSearch check ---
+    try:
+        if opensearch_client.health_check():
+            stats = opensearch_client.get_index_stats()
+            doc_count = stats.get("document_count", 0)
+            index_name = stats.get("index_name", "unknown")
+            services["opensearch"] = ServiceStatus(
+                status="healthy",
+                message=f"Index '{index_name}' with {doc_count} documents",
+            )
+        else:
+            services["opensearch"] = ServiceStatus(status="unhealthy", message="Cluster not responding")
+            overall_status = "degraded"
+    except Exception as e:
+        services["opensearch"] = ServiceStatus(status="unhealthy", message=str(e))
+        overall_status = "degraded"
+
+    # --- Ollama check ---
     try:
         ollama_client = OllamaClient(settings)
         ollama_health = await ollama_client.health_check()
